@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/habit.dart';
 import '../state/app_state.dart';
-import '../theme.dart';
+import '../utils/format.dart';
+import '../widgets/liquid.dart';
 
 /// Bài thở 60 giây giúp vượt qua cơn thèm: hít 4s, giữ 4s, thở ra 6s.
+/// Nước trong bình dâng lên khi hít vào và rút xuống khi thở ra.
 class CravingScreen extends StatefulWidget {
   const CravingScreen({super.key, required this.habit, required this.state});
 
@@ -35,63 +38,74 @@ class CravingScreen extends StatefulWidget {
 }
 
 enum _Phase {
-  inhale('Hít vào', 4),
-  hold('Giữ hơi', 4),
-  exhale('Thở ra', 6);
+  inhale('Hít vào'),
+  hold('Giữ hơi'),
+  exhale('Thở ra');
 
-  const _Phase(this.label, this.seconds);
+  const _Phase(this.label);
   final String label;
-  final int seconds;
 }
 
-class _CravingScreenState extends State<CravingScreen> with SingleTickerProviderStateMixin {
+class _CravingScreenState extends State<CravingScreen> with TickerProviderStateMixin, LiquidClock {
   static const _totalSeconds = 60;
+  static const _cycleSeconds = 14;
 
-  late final AnimationController _breath = AnimationController(vsync: this);
+  late final AnimationController _cycle = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: _cycleSeconds),
+  );
   late final Timer _timer;
   int _elapsed = 0;
   _Phase _phase = _Phase.inhale;
+  double _frozen = 0;
+
+  bool get _done => _elapsed >= _totalSeconds;
+
+  double get _seconds => _cycle.value * _cycleSeconds;
+
+  _Phase get _currentPhase => switch (_seconds) {
+    < 4 => _Phase.inhale,
+    < 8 => _Phase.hold,
+    _ => _Phase.exhale,
+  };
+
+  /// Độ "đầy hơi" 0..1 theo nhịp thở.
+  double get _breath {
+    final s = _seconds;
+    if (s < 4) return Curves.easeInOutSine.transform(s / 4);
+    if (s < 8) return 1;
+    return 1 - Curves.easeInOutSine.transform((s - 8) / 6);
+  }
 
   @override
   void initState() {
     super.initState();
-    _startPhase(_Phase.inhale);
+    startClock();
+    HapticFeedback.lightImpact();
+    _cycle
+      ..addListener(() {
+        final p = _currentPhase;
+        if (p != _phase && !_done) {
+          HapticFeedback.lightImpact();
+          setState(() => _phase = p);
+        }
+      })
+      ..repeat();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       setState(() => _elapsed++);
-      if (_elapsed >= _totalSeconds) {
+      if (_done) {
         _timer.cancel();
-        _breath.animateTo(0.5, duration: const Duration(seconds: 1));
+        _frozen = _breath;
+        _cycle.stop();
         HapticFeedback.heavyImpact();
       }
     });
   }
 
-  void _startPhase(_Phase phase) {
-    if (!mounted || _done) return;
-    setState(() => _phase = phase);
-    HapticFeedback.lightImpact();
-    final duration = Duration(seconds: phase.seconds);
-    final next = switch (phase) {
-      _Phase.inhale => _Phase.hold,
-      _Phase.hold => _Phase.exhale,
-      _Phase.exhale => _Phase.inhale,
-    };
-    final TickerFuture run = switch (phase) {
-      _Phase.inhale => _breath.animateTo(1, duration: duration, curve: Curves.easeInOutSine),
-      _Phase.hold => _breath.animateTo(1, duration: duration),
-      _Phase.exhale => _breath.animateTo(0, duration: duration, curve: Curves.easeInOutSine),
-    };
-    // Giữ hơi: bộ điều khiển đã ở 1 nên animateTo trả về ngay, cần chờ thủ công.
-    final wait = phase == _Phase.hold ? Future<void>.delayed(duration) : run.orCancel.catchError((_) {});
-    wait.then((_) => _startPhase(next));
-  }
-
-  bool get _done => _elapsed >= _totalSeconds;
-
   @override
   void dispose() {
     _timer.cancel();
-    _breath.dispose();
+    _cycle.dispose();
     super.dispose();
   }
 
@@ -108,7 +122,7 @@ class _CravingScreenState extends State<CravingScreen> with SingleTickerProvider
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xFF1E4D5C), Color(0xFF2E7D6B), Color(0xFF8CC9A8)],
+            colors: [Color(0xFF0F3550), Color(0xFF1B6A8A), Color(0xFF7CC8D8)],
           ),
         ),
         child: SafeArea(
@@ -125,7 +139,7 @@ class _CravingScreenState extends State<CravingScreen> with SingleTickerProvider
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 32),
                 child: Text(
-                  'Cơn thèm thường qua đi sau vài phút.\nHãy thở cùng mình nhé.',
+                  'Cơn thèm thường qua đi sau vài phút.\nHãy thở cùng Mầm nhé.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.titleMedium?.copyWith(color: Colors.white, height: 1.5),
                 ),
@@ -133,50 +147,37 @@ class _CravingScreenState extends State<CravingScreen> with SingleTickerProvider
               Expanded(
                 child: Center(
                   child: AnimatedBuilder(
-                    animation: _breath,
+                    animation: Listenable.merge([_cycle, liquidTime]),
                     builder: (context, _) {
-                      final scale = 0.55 + 0.45 * _breath.value;
-                      return Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          // Các vòng lan tỏa phía sau, chậm hơn vòng chính.
-                          for (final k in [1.35, 1.18])
-                            Container(
-                              width: 240 * scale * k,
-                              height: 240 * scale * k,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white.withValues(alpha: 0.08),
+                      final b = _done ? _frozen : _breath;
+                      final scale = 0.86 + 0.14 * b;
+                      final time = liquidTime.value;
+                      return SizedBox.square(
+                        dimension: 330,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Positioned.fill(
+                              child: CustomPaint(
+                                painter: _RingsPainter(time: time, radius: 120 * scale),
                               ),
                             ),
-                          Container(
-                            width: 240 * scale,
-                            height: 240 * scale,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: const RadialGradient(colors: [Color(0xFFFFFFFF), Color(0xFFCFF3E0)]),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.white.withValues(alpha: 0.35),
-                                  blurRadius: 40 * scale,
-                                  spreadRadius: 4,
-                                ),
-                              ],
-                            ),
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 400),
-                              child: Text(
-                                _done ? 'Tuyệt vời!' : _phase.label,
-                                key: ValueKey(_done ? 'done' : _phase),
-                                style: theme.textTheme.headlineSmall?.copyWith(
-                                  color: const Color(0xFF1E4D5C),
-                                  fontWeight: FontWeight.w800,
+                            Transform.scale(
+                              scale: scale,
+                              child: CustomPaint(
+                                size: const Size.square(240),
+                                painter: LiquidPainter(
+                                  shape: LiquidShape.circle,
+                                  level: 0.18 + 0.64 * b,
+                                  time: time,
+                                  glassColor: Colors.white.withValues(alpha: 0.92),
+                                  label: _done ? 'Tuyệt vời!' : _phase.label,
+                                  labelStyle: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800),
                                 ),
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       );
                     },
                   ),
@@ -212,7 +213,7 @@ class _CravingScreenState extends State<CravingScreen> with SingleTickerProvider
                   child: FilledButton(
                     style: FilledButton.styleFrom(
                       backgroundColor: Colors.white,
-                      foregroundColor: const Color(0xFF1E4D5C),
+                      foregroundColor: const Color(0xFF0F3550),
                     ),
                     onPressed: _done ? () => Navigator.pop(context) : null,
                     child: const Text('Mình ổn rồi'),
@@ -225,4 +226,31 @@ class _CravingScreenState extends State<CravingScreen> with SingleTickerProvider
       ),
     );
   }
+}
+
+/// Các vòng gợn sóng lan ra từ bình nước.
+class _RingsPainter extends CustomPainter {
+  _RingsPainter({required this.time, required this.radius});
+
+  final double time;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    for (var k = 0; k < 3; k++) {
+      final r = (time * 0.28 + k / 3) % 1.0;
+      canvas.drawCircle(
+        c,
+        radius * (1.02 + 0.32 * r),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2 + 4 * (1 - r)
+          ..color = Colors.white.withValues(alpha: math.max(0, (1 - r) * 0.28)),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RingsPainter old) => old.time != time || old.radius != radius;
 }

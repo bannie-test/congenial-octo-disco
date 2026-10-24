@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 
 import '../main.dart';
 import '../models/habit.dart';
+import '../widgets/drop_buddy.dart';
+import '../widgets/liquid.dart';
 import '../widgets/sprout.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -17,8 +19,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   int _page = 0;
   final _good = <HabitTemplate>{};
   final _bad = <HabitTemplate>{};
+  bool _morning = true;
+  bool _evening = true;
+  bool? _water;
+  bool _busy = false;
 
-  static const _pageCount = 3;
+  static const _pageCount = 4;
+
+  /// Mặc định bật nhắc uống nước nếu người dùng chọn thói quen uống nước.
+  bool get _waterOn => _water ?? _good.any((t) => t.emoji == '💧');
 
   @override
   void dispose() {
@@ -28,12 +37,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   void _next() {
     HapticFeedback.selectionClick();
-    if (_page < _pageCount - 1) {
-      _pages.nextPage(duration: const Duration(milliseconds: 450), curve: Curves.easeOutCubic);
-    } else {
-      HapticFeedback.mediumImpact();
-      AppScope.of(context).completeOnboarding(good: _good.toList(), bad: _bad.toList());
+    _pages.nextPage(duration: const Duration(milliseconds: 450), curve: Curves.easeOutCubic);
+  }
+
+  Future<void> _finish({required bool enable}) async {
+    final state = AppScope.of(context);
+    state.reminders
+      ..morning = _morning
+      ..evening = _evening
+      ..water = _waterOn;
+    if (enable) {
+      setState(() => _busy = true);
+      // Chỉ xin quyền khi người dùng chủ động bấm, sau khi đã hiểu lợi ích.
+      state.notificationsAllowed = await state.notifications.requestPermission();
+      if (!mounted) return;
     }
+    HapticFeedback.mediumImpact();
+    state.completeOnboarding(good: _good.toList(), bad: _bad.toList(), enableReminders: enable);
   }
 
   @override
@@ -44,8 +64,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     };
     final label = switch (_page) {
       0 => 'Bắt đầu',
-      1 => 'Tiếp tục',
-      _ => _bad.isEmpty ? 'Bỏ qua & gieo mầm' : 'Gieo mầm 🌱',
+      2 => _bad.isEmpty ? 'Bỏ qua' : 'Tiếp tục',
+      _ => 'Tiếp tục',
     };
 
     return Scaffold(
@@ -77,22 +97,53 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     selected: _bad,
                     onToggle: (t) => setState(() => _bad.contains(t) ? _bad.remove(t) : _bad.add(t)),
                   ),
+                  _ReminderPage(
+                    morning: _morning,
+                    evening: _evening,
+                    water: _waterOn,
+                    onMorning: (v) => setState(() => _morning = v),
+                    onEvening: (v) => setState(() => _evening = v),
+                    onWater: (v) => setState(() => _water = v),
+                  ),
                 ],
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 200),
-                opacity: canContinue ? 1 : 0.4,
-                child: FilledButton(
-                  onPressed: canContinue ? _next : null,
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: Text(label, key: ValueKey(label)),
-                  ),
-                ),
-              ),
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+              child: _page == _pageCount - 1
+                  ? Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        FilledButton(
+                          onPressed: _busy ? null : () => _finish(enable: true),
+                          child: _busy
+                              ? const SizedBox.square(
+                                  dimension: 22,
+                                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                                )
+                              : const Text('Bật nhắc nhở 🔔'),
+                        ),
+                        TextButton(
+                          onPressed: _busy ? null : () => _finish(enable: false),
+                          child: const Text('Để sau'),
+                        ),
+                      ],
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 200),
+                        opacity: canContinue ? 1 : 0.4,
+                        child: FilledButton(
+                          onPressed: canContinue ? _next : null,
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            child: Text(label, key: ValueKey(label)),
+                          ),
+                        ),
+                      ),
+                    ),
             ),
           ],
         ),
@@ -211,6 +262,97 @@ class _PickPage extends StatelessWidget {
                 ),
               ),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ReminderPage extends StatelessWidget {
+  const _ReminderPage({
+    required this.morning,
+    required this.evening,
+    required this.water,
+    required this.onMorning,
+    required this.onEvening,
+    required this.onWater,
+  });
+
+  final bool morning;
+  final bool evening;
+  final bool water;
+  final ValueChanged<bool> onMorning;
+  final ValueChanged<bool> onEvening;
+  final ValueChanged<bool> onWater;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget option(String emoji, String title, String subtitle, bool value, ValueChanged<bool> onChanged) {
+      return InkWell(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onChanged(!value);
+        },
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+          child: Row(
+            children: [
+              Text(emoji, style: const TextStyle(fontSize: 24)),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                    Text(
+                      subtitle,
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(value: value, onChanged: onChanged),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+      children: [
+        const Center(child: DropBuddy(size: 92, mood: DropMood.happy, bell: true)),
+        const SizedBox(height: 4),
+        Text(
+          'Để Mầm nhắc bạn nhé',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Mầm chỉ nhắc nhẹ nhàng, đúng lúc. Bạn có thể đổi giờ bất cứ lúc nào.',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 20),
+        Card(
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            children: [
+              option('☀️', 'Chào buổi sáng', '08:00 mỗi ngày', morning, onMorning),
+              const Divider(height: 1, indent: 56),
+              option('💧', 'Nhắc uống nước', '2 giờ một lần, từ 8:00 đến 20:00', water, onWater),
+              const Divider(height: 1, indent: 56),
+              option('🌙', 'Tổng kết cuối ngày', '21:00 mỗi ngày', evening, onEvening),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'Thói quen bạn chọn cũng đã có sẵn giờ nhắc gợi ý.',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),
       ],
     );

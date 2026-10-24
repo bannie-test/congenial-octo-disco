@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../main.dart';
+import '../models/reminder.dart';
+import '../utils/format.dart';
+import '../widgets/time_sheet.dart';
 
 const _goodEmojis = ['💧', '🏃', '📖', '😴', '🧘', '🥗', '✍️', '🎸', '🧹', '🙏', '💊', '🌞'];
 const _badEmojis = ['🧋', '📱', '🚬', '🍺', '🍟', '🛍️', '🎮', '🤬', '☕', '🍬', '😤', '🛌'];
@@ -28,6 +31,8 @@ class _AddHabitSheetState extends State<AddHabitSheet> {
   final _name = TextEditingController();
   final _cost = TextEditingController();
   late String _emoji = (widget.bad ? _badEmojis : _goodEmojis).first;
+  bool _remind = false;
+  late int _remindAt = widget.bad ? 15 * 60 : 20 * 60;
 
   @override
   void dispose() {
@@ -40,10 +45,11 @@ class _AddHabitSheetState extends State<AddHabitSheet> {
     final name = _name.text.trim();
     if (name.isEmpty) return;
     final state = AppScope.of(context);
+    final reminder = _remind ? HabitReminder(minutes: _remindAt) : null;
     if (widget.bad) {
-      state.addBadHabit(name, _emoji, costPerDay: int.tryParse(_cost.text) ?? 0);
+      state.addBadHabit(name, _emoji, costPerDay: int.tryParse(_cost.text) ?? 0, reminder: reminder);
     } else {
-      state.addGoodHabit(name, _emoji);
+      state.addGoodHabit(name, _emoji, reminder: reminder);
     }
     HapticFeedback.mediumImpact();
     Navigator.pop(context);
@@ -119,7 +125,24 @@ class _AddHabitSheetState extends State<AddHabitSheet> {
               ),
             ),
           ],
-          const SizedBox(height: 20),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _remind,
+            onChanged: (v) => setState(() => _remind = v),
+            title: Text(widget.bad ? '🔔 Nhắc trước giờ hay thèm' : '🔔 Nhắc tôi mỗi ngày'),
+            subtitle: GestureDetector(
+              onTap: () async {
+                final m = await showTimeSheet(context, initial: _remindAt, title: 'Giờ nhắc');
+                if (m != null) setState(() => _remindAt = m);
+              },
+              child: Text(
+                'Lúc ${formatHm(_remindAt)} · chạm để đổi giờ',
+                style: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           FilledButton(onPressed: _save, child: const Text('Thêm')),
         ],
       ),

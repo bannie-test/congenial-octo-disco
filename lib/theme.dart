@@ -7,10 +7,11 @@ const _seed = Color(0xFF3FA66B);
 ThemeData buildTheme(Brightness brightness) {
   final scheme = ColorScheme.fromSeed(seedColor: _seed, brightness: brightness);
   final isLight = brightness == Brightness.light;
+  final background = isLight ? const Color(0xFFF6F4EC) : const Color(0xFF111512);
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
-    scaffoldBackgroundColor: isLight ? const Color(0xFFF6F4EC) : const Color(0xFF111512),
+    scaffoldBackgroundColor: background,
     cardTheme: CardThemeData(
       elevation: 0,
       color: isLight ? Colors.white : const Color(0xFF1B211D),
@@ -35,20 +36,10 @@ ThemeData buildTheme(Brightness brightness) {
       },
     ),
     appBarTheme: AppBarTheme(
-      backgroundColor: Colors.transparent,
+      // Nền đặc để tiêu đề thu gọn không đè lên nội dung khi cuộn.
+      backgroundColor: background,
       surfaceTintColor: Colors.transparent,
       systemOverlayStyle: isLight ? SystemUiOverlayStyle.dark : SystemUiOverlayStyle.light,
     ),
   );
-}
-
-/// 120000 -> "120.000đ"
-String formatVnd(int amount) {
-  final digits = amount.abs().toString();
-  final buf = StringBuffer();
-  for (var i = 0; i < digits.length; i++) {
-    if (i > 0 && (digits.length - i) % 3 == 0) buf.write('.');
-    buf.write(digits[i]);
-  }
-  return '${amount < 0 ? '-' : ''}$bufđ';
 }

@@ -12,18 +12,26 @@ class SproutView extends StatefulWidget {
   final double size;
 
   @override
-  State<SproutView> createState() => _SproutViewState();
+  State<SproutView> createState() => SproutViewState();
 }
 
-class _SproutViewState extends State<SproutView> with SingleTickerProviderStateMixin {
+class SproutViewState extends State<SproutView> with TickerProviderStateMixin {
   late final AnimationController _sway = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 4),
   )..repeat();
+  late final AnimationController _water = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  );
+
+  /// Mầm vừa được tưới: nhún nhảy, cười tít mắt và toả lấp lánh.
+  void water() => _water.forward(from: 0);
 
   @override
   void dispose() {
     _sway.dispose();
+    _water.dispose();
     super.dispose();
   }
 
@@ -39,13 +47,14 @@ class _SproutViewState extends State<SproutView> with SingleTickerProviderStateM
         duration: const Duration(milliseconds: 700),
         curve: Curves.easeInOut,
         builder: (context, vitality, _) => AnimatedBuilder(
-          animation: _sway,
+          animation: Listenable.merge([_sway, _water]),
           builder: (context, _) => CustomPaint(
             size: Size.square(widget.size),
             painter: SproutPainter(
               growth: growth.clamp(0, 5),
               vitality: vitality.clamp(0, 1),
               sway: math.sin(_sway.value * 2 * math.pi),
+              watered: _water.isAnimating ? _water.value : 0,
             ),
           ),
         ),
@@ -55,11 +64,14 @@ class _SproutViewState extends State<SproutView> with SingleTickerProviderStateM
 }
 
 class SproutPainter extends CustomPainter {
-  SproutPainter({required this.growth, required this.vitality, required this.sway});
+  SproutPainter({required this.growth, required this.vitality, required this.sway, this.watered = 0});
 
   final double growth;
   final double vitality;
   final double sway;
+
+  /// Tiến trình hiệu ứng vừa được tưới (0 = không có).
+  final double watered;
 
   static const _healthyLeaf = Color(0xFF4CB86E);
   static const _wiltedLeaf = Color(0xFFB8A55A);
@@ -73,12 +85,41 @@ class SproutPainter extends CustomPainter {
     final base = Offset(w / 2, h * 0.74);
 
     _paintShadow(canvas, w, h);
+    canvas.save();
+    if (watered > 0) {
+      // Co giãn kiểu "thạch" quanh gốc cây.
+      final k = math.sin(watered * math.pi * 3) * (1 - watered) * 0.12;
+      canvas.translate(base.dx, base.dy);
+      canvas.scale(1 - k * 0.5, 1 + k);
+      canvas.translate(-base.dx, -base.dy);
+    }
     if (growth < 0.5) {
       _paintSeed(canvas, base, w);
     } else {
       _paintPlant(canvas, base, w, h);
     }
+    canvas.restore();
     _paintPot(canvas, w, h);
+    if (watered > 0) _paintSparkles(canvas, base, w, h);
+  }
+
+  /// Tia lấp lánh bay lên khi vừa được tưới.
+  void _paintSparkles(Canvas canvas, Offset base, double w, double h) {
+    final top = base.dy - h * (0.12 + 0.11 * growth);
+    final paint = Paint()..color = const Color(0xFF6FD0FC).withValues(alpha: (1 - watered) * 0.9);
+    for (var i = 0; i < 4; i++) {
+      final dx = (i - 1.5) * w * 0.13;
+      final c = Offset(base.dx + dx, top + h * 0.1 - watered * h * (0.14 + 0.03 * (i % 2)));
+      final r = w * (0.022 + 0.008 * (i % 2)) * (0.6 + 0.4 * math.sin(watered * math.pi));
+      final star = Path()
+        ..moveTo(c.dx, c.dy - r * 2)
+        ..quadraticBezierTo(c.dx, c.dy, c.dx + r * 2, c.dy)
+        ..quadraticBezierTo(c.dx, c.dy, c.dx, c.dy + r * 2)
+        ..quadraticBezierTo(c.dx, c.dy, c.dx - r * 2, c.dy)
+        ..quadraticBezierTo(c.dx, c.dy, c.dx, c.dy - r * 2)
+        ..close();
+      canvas.drawPath(star, paint);
+    }
   }
 
   void _paintShadow(Canvas canvas, double w, double h) {
@@ -226,10 +267,22 @@ class SproutPainter extends CustomPainter {
     // Chớp mắt ngắn ở đỉnh nhịp lắc lư.
     final blink = sway > 0.97 ? 0.15 : 1.0;
     for (final dx in [-eyeDx, eyeDx]) {
-      canvas.drawOval(
-        Rect.fromCenter(center: c.translate(dx, -w * 0.015), width: w * 0.03, height: w * 0.038 * blink),
-        eye,
-      );
+      final e = c.translate(dx, -w * 0.015);
+      if (watered > 0 && watered < 0.85) {
+        // Vừa được tưới: cười tít mắt ^ ^.
+        canvas.drawPath(
+          Path()
+            ..moveTo(e.dx - w * 0.018, e.dy + w * 0.008)
+            ..quadraticBezierTo(e.dx, e.dy - w * 0.022, e.dx + w * 0.018, e.dy + w * 0.008),
+          Paint()
+            ..color = eye.color
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = w * 0.01
+            ..strokeCap = StrokeCap.round,
+        );
+        continue;
+      }
+      canvas.drawOval(Rect.fromCenter(center: e, width: w * 0.03, height: w * 0.038 * blink), eye);
     }
     final cheek = Paint()..color = const Color(0xFFFF9E9E).withValues(alpha: 0.55 * vitality);
     canvas.drawCircle(c.translate(-eyeDx * 1.7, w * 0.012), w * 0.02, cheek);
@@ -252,5 +305,5 @@ class SproutPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(SproutPainter old) =>
-      old.growth != growth || old.vitality != vitality || old.sway != sway;
+      old.growth != growth || old.vitality != vitality || old.sway != sway || old.watered != watered;
 }

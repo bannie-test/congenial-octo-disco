@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mam/models/habit.dart';
 import 'package:mam/state/app_state.dart';
-import 'package:mam/theme.dart';
+import 'package:mam/utils/format.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
