@@ -86,6 +86,27 @@ Ghi chú nền tảng:
 - **iOS**: `AppDelegate` đặt `UNUserNotificationCenter` delegate để hiện thông báo cả khi app đang mở.
 - **Web** chỉ để xem giao diện: trình duyệt không hỗ trợ đặt lịch thông báo nên dùng bản giả lập.
 
+## Build APK tự động (GitHub Actions)
+
+Workflow `.github/workflows/build-apk.yml` chạy `analyze`, `test` rồi build APK tên `bad-habit-<version>.apk`:
+
+- **Push lên `dev`/`main`, pull request, hoặc bấm "Run workflow"** trong tab Actions: version lấy từ dòng `version:` trong `pubspec.yaml`. Tải APK ở mục **Artifacts** của lần chạy.
+- **Đẩy tag** `v1.2.0`: version lấy từ tag (`bad-habit-1.2.0.apk`), APK được đính kèm vào **GitHub Release**.
+
+  ```bash
+  git tag v1.0.0 && git push origin v1.0.0
+  ```
+
+Mỗi lần build có số build tăng dần (`github.run_number`), nên bản mới cài đè được bản cũ, **với điều kiện cùng khóa ký**. Nếu không cấu hình khóa, APK được ký bằng khóa debug ngẫu nhiên của máy CI, và mỗi lần cài bản mới phải gỡ bản cũ trước. Để có khóa cố định:
+
+1. Tạo keystore một lần (giữ kỹ file và mật khẩu, mất là không cập nhật app được nữa):
+   ```bash
+   keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+   base64 -w0 upload-keystore.jks   # macOS: base64 -i upload-keystore.jks
+   ```
+2. Vào **Settings › Secrets and variables › Actions** của repo, thêm 4 secret:
+   `ANDROID_KEYSTORE_BASE64` (chuỗi base64 ở trên), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`upload`), `ANDROID_KEY_PASSWORD`.
+
 ## Lộ trình tiếp theo
 
 1. Widget màn hình chính (WidgetKit / Glance) để đánh dấu thói quen không cần mở app.
