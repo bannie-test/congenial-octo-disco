@@ -7,10 +7,14 @@ import 'package:flutter/services.dart';
 import '../main.dart';
 import '../models/habit.dart';
 import '../models/inbox_item.dart';
+import '../services/sound_service.dart';
+import '../services/weather.dart';
 import '../state/app_state.dart';
 import '../utils/format.dart';
+import '../utils/greeting.dart';
 import '../widgets/drop_buddy.dart';
 import '../widgets/droplet_fx.dart';
+import '../widgets/habit_icon.dart';
 import '../widgets/in_app_banner.dart';
 import '../widgets/liquid.dart';
 import '../widgets/ringing_bell.dart';
@@ -18,7 +22,9 @@ import '../widgets/sprout.dart';
 import 'add_habit_sheet.dart';
 import 'craving_screen.dart';
 import 'notifications_screen.dart';
+import 'plant_screen.dart';
 import 'reminders_screen.dart';
+import 'shell.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -62,7 +68,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _listen() async {
     if (!mounted) return;
     final state = _state;
-    _events = state.events.listen(_onEvent);
+    _events = state.inboxEvents.listen(_onEvent);
     state.takeUndelivered().forEach(_onEvent);
     _taps = state.notifications.taps.listen(_openPayload);
     unawaited(state.refreshPermission());
@@ -103,6 +109,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     InboxKind.level => 3,
     InboxKind.clean => 2,
     InboxKind.streak => 1,
+    InboxKind.missed => 1,
     _ => 0,
   };
 
@@ -110,6 +117,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted || _batch.isEmpty) return;
     final items = List.of(_batch)..sort((a, b) => _priority(b.kind).compareTo(_priority(a.kind)));
     _batch.clear();
+    _state.playSound(items.first.kind == InboxKind.missed ? Sfx.missed : Sfx.success);
     if (items.first.kind == InboxKind.daily) {
       // Hoàn thành đủ thói quen: giọt nước hôm nay bung ra ăn mừng.
       final gauge = _visibleCenter(_gaugeKey);
@@ -127,6 +135,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final nav = Navigator.of(context);
     if (payload == 'inbox') {
       nav.push(NotificationsScreen.route());
+    } else if (payload == 'calendar') {
+      shellTab.value = ShellTabs.calendar;
     } else if (payload.startsWith('craving:')) {
       final id = payload.substring('craving:'.length);
       final habit = _state.badHabits.where((h) => h.id == id).firstOrNull;
@@ -228,14 +238,6 @@ class _Header extends StatelessWidget {
   const _Header({required this.state});
   final AppState state;
 
-  static String _greeting(DateTime t) => switch (t.hour) {
-    >= 5 && < 11 => 'Chào buổi sáng ☀️',
-    >= 11 && < 14 => 'Buổi trưa vui vẻ 🌤️',
-    >= 14 && < 18 => 'Chào buổi chiều 🌿',
-    >= 18 && < 22 => 'Buổi tối an lành 🌙',
-    _ => 'Khuya rồi, ngủ sớm nhé 😴',
-  };
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -249,11 +251,15 @@ class _Header extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _greeting(now),
+                  greetingTitle(now),
                   style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 Text(
-                  formatDate(now),
+                  [
+                    formatDate(now),
+                    if (state.weather case final w?)
+                      '${weatherEmoji(w.code, night: now.hour >= 19 || now.hour < 6)} ${w.temp.round()}°C · 💧 ${w.humidity}%',
+                  ].join('   '),
                   style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
               ],
@@ -331,7 +337,18 @@ class _PlantCard extends StatelessWidget {
               ),
             ],
           ),
-          SproutView(key: sproutKey, growth: state.stage + state.stageProgress, vitality: v, size: 230),
+          GestureDetector(
+            onTap: () {
+              HapticFeedback.lightImpact();
+              Navigator.of(context).push(PlantScreen.route());
+            },
+            child: SproutView(
+              key: sproutKey,
+              growth: state.stage + state.stageProgress,
+              vitality: v,
+              size: 230,
+            ),
+          ),
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
             child: Text(
@@ -353,9 +370,8 @@ class _PlantCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            isMax
-                ? 'Mầm đã nở hoa 🌸 Bạn thật tuyệt!'
-                : 'Còn ${AppState.stageThresholds[state.stage + 1] - state.growthPoints} điểm nữa để lên cấp',
+            '${isMax ? 'Mầm đã nở hoa 🌸' : 'Còn ${AppState.stageThresholds[state.stage + 1] - state.growthPoints} điểm nữa để lên cấp'}'
+            ' · Chạm vào Mầm để trò chuyện',
             style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
         ],
@@ -374,14 +390,14 @@ class _TodayCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
-    final total = state.goodHabits.length;
+    final goal = state.goal;
     final done = state.doneTodayCount;
     final progress = state.todayProgress;
-    final hint = total == 0
+    final hint = goal == 0
         ? 'Thêm thói quen để bắt đầu tưới Mầm.'
-        : done == total
-        ? 'Đã tưới đủ hôm nay 💧'
-        : 'Còn ${total - done} giọt nữa là đầy!';
+        : done >= goal
+        ? 'Đạt mục tiêu hôm nay 💧'
+        : 'Còn ${goal - done} giọt nữa là đạt mục tiêu!';
 
     return Card(
       child: Padding(
@@ -409,7 +425,7 @@ class _TodayCard extends StatelessWidget {
                     TextSpan(
                       children: [
                         TextSpan(
-                          text: '$done/$total',
+                          text: '$done/$goal',
                           style: theme.textTheme.headlineMedium?.copyWith(
                             fontWeight: FontWeight.w900,
                             color: dark ? WaterColors.light : WaterColors.deep,
@@ -427,18 +443,10 @@ class _TodayCard extends StatelessWidget {
                       style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      const Text('💰', style: TextStyle(fontSize: 18)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Đã tiết kiệm ${formatVnd(state.totalMoneySaved)}',
-                          style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ],
+                  const SizedBox(height: 10),
+                  Text(
+                    '🎯 Mục tiêu: $goal/${state.goodHabits.length} thói quen mỗi ngày',
+                    style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ],
               ),
@@ -604,6 +612,7 @@ class _GoodHabitTileState extends State<_GoodHabitTile> {
         final nowDone = state.toggleToday(habit);
         if (nowDone) {
           HapticFeedback.mediumImpact();
+          state.playSound(Sfx.drop);
           widget.onWatered(_checkKey);
         } else {
           HapticFeedback.selectionClick();
@@ -622,18 +631,7 @@ class _GoodHabitTileState extends State<_GoodHabitTile> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             child: Row(
               children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: done
-                        ? Colors.white.withValues(alpha: dark ? 0.12 : 0.55)
-                        : scheme.surfaceContainerHighest.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Text(habit.emoji, style: const TextStyle(fontSize: 24)),
-                ),
+                HabitIcon(emoji: habit.emoji, done: done),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -772,15 +770,6 @@ class _BadHabitCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const Spacer(),
-                  if (habit.costPerDay > 0)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Text(
-                        '+${formatVnd(habit.moneySaved(state.now))}',
-                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                    ),
                 ],
               ),
               const SizedBox(height: 12),

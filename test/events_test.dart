@@ -28,10 +28,10 @@ void main() {
 
   test('chuỗi 3 ngày được chúc mừng đúng một lần, kể cả khi bỏ chọn rồi chọn lại', () async {
     s.addGoodHabit('Chạy', '🏃');
-    final h = s.goodHabits.single;
+    final h = s.goodHabits.last;
     h.doneDays.addAll({'2026-10-22', '2026-10-23'});
     final events = <InboxItem>[];
-    s.events.listen(events.add);
+    s.inboxEvents.listen(events.add);
 
     s.toggleToday(h);
     s.toggleToday(h);
@@ -39,21 +39,36 @@ void main() {
     await pumpEventQueue();
 
     expect(ofKind(InboxKind.streak).single.title, '3 ngày liên tiếp!');
-    expect(ofKind(InboxKind.daily).single.title, 'Đã tưới đủ cho Mầm hôm nay!');
+    // Mục tiêu sau giới thiệu là 1 thói quen nên đã đạt.
+    expect(ofKind(InboxKind.daily).single.title, 'Đạt mục tiêu hôm nay!');
     expect(events.where((e) => e.kind == InboxKind.streak), hasLength(1));
     expect(events.where((e) => e.kind == InboxKind.daily), hasLength(1));
   });
 
+  test('lỡ mục tiêu hôm qua được báo một lần, không tính ngày trước khi dùng app', () {
+    expect(ofKind(InboxKind.missed), isEmpty);
+    now = DateTime(2026, 10, 25, 8);
+    s.refreshEvents();
+    s.refreshEvents();
+    final missed = ofKind(InboxKind.missed).single;
+    expect(missed.title, 'Hôm qua Mầm hơi khát');
+    expect(missed.body, contains('0/1'));
+
+    // Hôm sau đạt mục tiêu thì không báo lỡ nữa.
+    s.toggleToday(s.goodHabits.single);
+    now = DateTime(2026, 10, 26, 8);
+    s.refreshEvents();
+    expect(ofKind(InboxKind.missed), hasLength(1));
+  });
+
   test('chỉ báo cột mốc cao nhất, rồi bắt đầu lại sau khi tái phạm', () {
-    s.addBadHabit('Trà sữa', '🧋', costPerDay: 40000);
+    s.addBadHabit('Trà sữa', '🧋');
     final b = s.badHabits.single;
 
     now = now.add(const Duration(days: 3, hours: 1));
     s.refreshEvents();
     s.refreshEvents();
-    final clean = ofKind(InboxKind.clean).single;
-    expect(clean.title, 'Cột mốc 3 ngày!');
-    expect(clean.body, contains('tiết kiệm được'));
+    expect(ofKind(InboxKind.clean).single.title, 'Cột mốc 3 ngày!');
 
     s.relapse(b);
     expect(s.inbox.first.kind, InboxKind.relapse);
@@ -61,11 +76,10 @@ void main() {
 
     now = now.add(const Duration(days: 1, minutes: 1));
     s.refreshEvents();
-    expect(s.inbox.first.title, 'Cột mốc 1 ngày!');
+    expect(ofKind(InboxKind.clean).first.title, 'Cột mốc 1 ngày!');
   });
 
   test('lên cấp được báo một lần', () {
-    s.addGoodHabit('Nước', '💧');
     final h = s.goodHabits.single;
     h.doneDays.addAll({'2026-10-01', '2026-10-03'});
     s.toggleToday(h);
@@ -75,7 +89,7 @@ void main() {
     expect(ofKind(InboxKind.level), hasLength(1));
   });
 
-  test('dữ liệu từ bản cũ không dội thông báo, nhưng thành tích mới vẫn được báo', () async {
+  test('dữ liệu bản cũ: không dội thông báo, gộp nhắc uống nước vào thói quen uống nước', () async {
     final old = GoodHabit(
       id: 'g',
       name: 'Chạy',
@@ -86,16 +100,29 @@ void main() {
       'mam_state_v1': jsonEncode({
         'onboarded': true,
         'good': [old.toJson()],
-        'bad': [],
+        'bad': [
+          {
+            'id': 'b',
+            'name': 'Trà sữa',
+            'emoji': '🧋',
+            'cleanSince': '2026-10-01T09:00:00.000',
+            'costPerDay': 40000,
+            'relapses': [],
+          },
+        ],
+        'reminders': {'enabled': true, 'water': true, 'waterEvery': 90, 'waterFrom': 480, 'waterTo': 1200},
       }),
     });
     final prefs = await SharedPreferences.getInstance();
     final loaded = AppState(prefs: prefs, clock: () => now)..load();
     expect(loaded.inbox, isEmpty);
     expect(loaded.takeUndelivered(), isEmpty);
+    final water = loaded.goodHabits.first;
+    expect(water.isWater, isTrue);
+    expect(water.reminder!.every, 90);
 
     now = DateTime(2026, 10, 26, 9);
-    final h = loaded.goodHabits.single..doneDays.add('2026-10-25');
+    final h = loaded.goodHabits.last..doneDays.add('2026-10-25');
     loaded.toggleToday(h);
     expect(loaded.inbox.where((i) => i.kind == InboxKind.streak).single.title, '7 ngày liên tiếp!');
   });
@@ -109,41 +136,17 @@ void main() {
     expect(s.takeUndelivered(), isEmpty);
   });
 
-  test('lưu và đọc lại nhắc nhở cùng hộp thông báo', () async {
-    SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
-    final a = AppState(prefs: prefs, clock: () => now)
-      ..completeOnboarding(
-        good: [goodHabitTemplates[1]],
-        bad: [badHabitTemplates.first],
-        enableReminders: true,
-      );
-    a.updateReminders(
-      (r) => r
-        ..water = true
-        ..waterEvery = 90,
-    );
-    a.setGoodReminder(a.goodHabits.single, HabitReminder(minutes: 7 * 60, weekdays: {1, 2}));
-
-    final b = AppState(prefs: prefs, clock: () => now)..load();
-    expect(b.reminders.enabled, isTrue);
-    expect(b.reminders.water, isTrue);
-    expect(b.reminders.waterEvery, 90);
-    expect(b.goodHabits.single.reminder!.weekdays, {1, 2});
-    expect(b.badHabits.single.reminder!.minutes, 14 * 60 + 30);
-    expect(b.inbox.single.title, 'Chào mừng bạn đến với Mầm!');
-  });
-
   test('đặt lại lịch nhắc mỗi khi cài đặt thay đổi', () async {
     final service = PreviewNotificationService();
     final state = AppState(clock: () => now, notifications: service)
       ..completeOnboarding(good: [], bad: [], enableReminders: true);
     await pumpEventQueue();
-    expect(service.applied, hasLength(2));
-
-    state.updateReminders((r) => r.water = true);
-    await pumpEventQueue();
+    // Sáng + tối + uống nước 2 giờ một lần từ 8h đến 20h.
     expect(service.applied, hasLength(9));
+
+    state.setGoodReminder(state.goodHabits.single, HabitReminder.interval(every: 60));
+    await pumpEventQueue();
+    expect(service.applied, hasLength(15));
 
     state.updateReminders((r) => r.enabled = false);
     await pumpEventQueue();

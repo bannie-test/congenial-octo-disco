@@ -1,5 +1,5 @@
 /// Loại thông báo trong app, quyết định màu và biểu tượng.
-enum InboxKind { welcome, level, streak, clean, daily, relapse }
+enum InboxKind { welcome, level, streak, clean, daily, relapse, missed }
 
 /// Một thông báo trong "Hộp thông báo" của app.
 class InboxItem {

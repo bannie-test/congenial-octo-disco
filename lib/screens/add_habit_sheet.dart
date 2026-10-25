@@ -6,7 +6,7 @@ import '../models/reminder.dart';
 import '../utils/format.dart';
 import '../widgets/time_sheet.dart';
 
-const _goodEmojis = ['💧', '🏃', '📖', '😴', '🧘', '🥗', '✍️', '🎸', '🧹', '🙏', '💊', '🌞'];
+const _goodEmojis = ['🏃', '🚶', '🏋️', '📖', '😴', '🧘', '🥗', '✍️', '🎸', '🧹', '💊', '🌞'];
 const _badEmojis = ['🧋', '📱', '🚬', '🍺', '🍟', '🛍️', '🎮', '🤬', '☕', '🍬', '😤', '🛌'];
 
 Future<void> showAddHabitSheet(BuildContext context, {required bool bad}) {
@@ -29,7 +29,6 @@ class AddHabitSheet extends StatefulWidget {
 
 class _AddHabitSheetState extends State<AddHabitSheet> {
   final _name = TextEditingController();
-  final _cost = TextEditingController();
   late String _emoji = (widget.bad ? _badEmojis : _goodEmojis).first;
   bool _remind = false;
   late int _remindAt = widget.bad ? 15 * 60 : 20 * 60;
@@ -37,7 +36,6 @@ class _AddHabitSheetState extends State<AddHabitSheet> {
   @override
   void dispose() {
     _name.dispose();
-    _cost.dispose();
     super.dispose();
   }
 
@@ -47,7 +45,7 @@ class _AddHabitSheetState extends State<AddHabitSheet> {
     final state = AppScope.of(context);
     final reminder = _remind ? HabitReminder(minutes: _remindAt) : null;
     if (widget.bad) {
-      state.addBadHabit(name, _emoji, costPerDay: int.tryParse(_cost.text) ?? 0, reminder: reminder);
+      state.addBadHabit(name, _emoji, reminder: reminder);
     } else {
       state.addGoodHabit(name, _emoji, reminder: reminder);
     }
@@ -112,19 +110,6 @@ class _AddHabitSheetState extends State<AddHabitSheet> {
             ),
             onSubmitted: (_) => _save(),
           ),
-          if (widget.bad) ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _cost,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: InputDecoration(
-                labelText: 'Chi phí mỗi ngày (không bắt buộc)',
-                suffixText: 'đ',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-              ),
-            ),
-          ],
           const SizedBox(height: 8),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,

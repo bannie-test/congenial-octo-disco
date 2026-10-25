@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
+import 'screens/shell.dart';
 import 'services/notification_service.dart';
+import 'services/sound_service.dart';
+import 'services/weather.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
 
@@ -23,10 +25,17 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('Không khởi tạo được thông báo: $e');
   }
-  final state = AppState(prefs: prefs, notifications: notifications)..load();
+  final state = AppState(
+    prefs: prefs,
+    notifications: notifications,
+    weatherService: OpenMeteoService(),
+    sounds: AssetSoundService(),
+  )..load();
   runApp(MamApp(state: state));
   // Lịch cột mốc phụ thuộc thời gian, nên đặt lại mỗi lần mở app.
   unawaited(state.rescheduleNotifications());
+  // Thời tiết cập nhật xong sẽ tự đặt lại lời chào buổi sáng kèm dự báo.
+  unawaited(state.refreshWeather());
 }
 
 /// Đưa [AppState] xuống cây widget; widget nào gọi [AppScope.of] sẽ
@@ -58,7 +67,7 @@ class MamApp extends StatelessWidget {
         home: Builder(
           builder: (context) => AnimatedSwitcher(
             duration: const Duration(milliseconds: 600),
-            child: AppScope.of(context).onboarded ? const HomeScreen() : const OnboardingScreen(),
+            child: AppScope.of(context).onboarded ? const MainShell() : const OnboardingScreen(),
           ),
         ),
       ),

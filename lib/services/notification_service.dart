@@ -96,7 +96,7 @@ class LocalNotificationService implements NotificationService {
     }
     await _plugin.initialize(
       settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        android: AndroidInitializationSettings('@drawable/ic_notification'),
         // Không xin quyền ngay khi mở app: để màn giới thiệu giải thích trước.
         iOS: DarwinInitializationSettings(
           requestAlertPermission: false,

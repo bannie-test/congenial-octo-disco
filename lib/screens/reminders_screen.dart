@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,10 +5,10 @@ import '../main.dart';
 import '../models/habit.dart';
 import '../models/reminder.dart';
 import '../services/reminder_planner.dart';
+import '../services/sound_service.dart';
 import '../state/app_state.dart';
-import '../utils/format.dart';
 import '../widgets/drop_buddy.dart';
-import '../widgets/droplet_fx.dart';
+import '../widgets/habit_icon.dart';
 import '../widgets/liquid.dart';
 import '../widgets/time_sheet.dart';
 
@@ -24,6 +22,7 @@ class RemindersScreen extends StatelessWidget {
     final state = AppScope.of(context);
     final r = state.reminders;
     final active = r.enabled;
+    final theme = Theme.of(context);
 
     return Scaffold(
       body: CustomScrollView(
@@ -40,7 +39,7 @@ class RemindersScreen extends StatelessWidget {
                 _Group(
                   children: [
                     _SwitchRow(
-                      emoji: '🔔',
+                      leading: const Text('🔔', style: TextStyle(fontSize: 24)),
                       title: 'Bật nhắc nhở',
                       subtitle: active ? 'Mầm sẽ nhắc bạn đúng giờ' : 'Tất cả lời nhắc đang tắt',
                       value: active,
@@ -68,7 +67,7 @@ class RemindersScreen extends StatelessWidget {
                             _TimedRow(
                               emoji: '☀️',
                               title: 'Chào buổi sáng',
-                              subtitle: 'Lời chúc mở đầu ngày mới',
+                              subtitle: 'Kèm dự báo thời tiết trong ngày',
                               minutes: r.morningAt,
                               value: r.morning,
                               onChanged: (v) => state.updateReminders((r) => r.morning = v),
@@ -86,15 +85,15 @@ class RemindersScreen extends StatelessWidget {
                             ),
                           ],
                         ),
-                        const _SectionTitle('Uống nước'),
-                        _WaterCard(state: state),
                         if (state.goodHabits.isNotEmpty) ...[
                           const _SectionTitle('Thói quen tốt'),
+                          _Hint('Nhắc vào giờ cố định, hoặc lặp lại theo chu kỳ như uống nước.'),
                           _Group(
                             children: [
                               for (final (i, h) in state.goodHabits.indexed) ...[
                                 if (i > 0) const _RowDivider(),
                                 _HabitRow(
+                                  leading: HabitIcon(emoji: h.emoji, size: 40),
                                   emoji: h.emoji,
                                   name: h.name,
                                   reminder: h.reminder,
@@ -107,19 +106,13 @@ class RemindersScreen extends StatelessWidget {
                         ],
                         if (state.badHabits.isNotEmpty) ...[
                           const _SectionTitle('Giờ hay thèm'),
-                          Padding(
-                            padding: const EdgeInsets.only(left: 4, bottom: 10, right: 4),
-                            child: Text(
-                              'Mầm sẽ nhắc đúng lúc bạn hay thèm, kèm một mẹo nhỏ để vượt qua.',
-                              style: Theme.of(context).textTheme.bodyMedium
-                                  ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
-                            ),
-                          ),
+                          _Hint('Mầm sẽ nhắc đúng lúc bạn hay thèm, kèm một mẹo nhỏ để vượt qua.'),
                           _Group(
                             children: [
                               for (final (i, h) in state.badHabits.indexed) ...[
                                 if (i > 0) const _RowDivider(),
                                 _HabitRow(
+                                  leading: Text(h.emoji, style: const TextStyle(fontSize: 26)),
                                   emoji: h.emoji,
                                   name: h.name,
                                   reminder: h.reminder,
@@ -131,15 +124,26 @@ class RemindersScreen extends StatelessWidget {
                             ],
                           ),
                         ],
-                        const _SectionTitle('Thành tích'),
+                        const _SectionTitle('Thành tích và âm thanh'),
                         _Group(
                           children: [
                             _SwitchRow(
-                              emoji: '🏆',
+                              leading: const Text('🏆', style: TextStyle(fontSize: 24)),
                               title: 'Báo khi đạt cột mốc',
                               subtitle: '1, 3, 7, 14, 30… ngày không tái phạm',
                               value: r.milestones,
                               onChanged: (v) => state.updateReminders((r) => r.milestones = v),
+                            ),
+                            const _RowDivider(),
+                            _SwitchRow(
+                              leading: const Text('🎵', style: TextStyle(fontSize: 24)),
+                              title: 'Âm thanh hiệu ứng',
+                              subtitle: 'Khi hoàn thành thói quen, đạt hoặc lỡ mục tiêu',
+                              value: r.sound,
+                              onChanged: (v) {
+                                state.updateReminders((r) => r.sound = v);
+                                if (v) state.playSound(Sfx.success);
+                              },
                             ),
                           ],
                         ),
@@ -149,6 +153,14 @@ class RemindersScreen extends StatelessWidget {
                           onPressed: () => _sendTest(context, state),
                           icon: const Icon(Icons.send_rounded),
                           label: const Text('Gửi thử một thông báo'),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Thông báo đã đặt lịch: ${state.plannedNotifications.length}/$maxPlanned',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
                         ),
                       ],
                     ),
@@ -168,9 +180,10 @@ class RemindersScreen extends StatelessWidget {
   Future<void> _sendTest(BuildContext context, AppState state) async {
     final messenger = ScaffoldMessenger.of(context);
     HapticFeedback.mediumImpact();
+    final forecast = state.morningForecast;
     await state.notifications.showNow(
       title: '💧 Mầm gửi lời chào!',
-      body: 'Thông báo đã hoạt động. Mầm sẽ nhắc bạn đúng giờ nhé.',
+      body: forecast == null ? 'Thông báo đã hoạt động. Mầm sẽ nhắc bạn đúng giờ nhé.' : 'Dự báo: $forecast.',
     );
     messenger.showSnackBar(const SnackBar(content: Text('Đã gửi! Kéo thanh thông báo xuống để xem nhé.')));
   }
@@ -280,6 +293,23 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
+class _Hint extends StatelessWidget {
+  const _Hint(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 10, right: 4),
+      child: Text(
+        text,
+        style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+      ),
+    );
+  }
+}
+
 class _Group extends StatelessWidget {
   const _Group({required this.children});
   final List<Widget> children;
@@ -297,19 +327,19 @@ class _RowDivider extends StatelessWidget {
   const _RowDivider();
 
   @override
-  Widget build(BuildContext context) => const Divider(height: 1, indent: 64, endIndent: 16);
+  Widget build(BuildContext context) => const Divider(height: 1, indent: 68, endIndent: 16);
 }
 
 class _RowShell extends StatelessWidget {
   const _RowShell({
-    required this.emoji,
+    required this.leading,
     required this.title,
     required this.subtitle,
     required this.trailing,
     this.onTap,
   });
 
-  final String emoji;
+  final Widget leading;
   final String title;
   final String subtitle;
   final Widget trailing;
@@ -324,7 +354,7 @@ class _RowShell extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
         child: Row(
           children: [
-            SizedBox(width: 36, child: Text(emoji, style: const TextStyle(fontSize: 24))),
+            SizedBox(width: 40, child: Center(child: leading)),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -350,14 +380,14 @@ class _RowShell extends StatelessWidget {
 
 class _SwitchRow extends StatelessWidget {
   const _SwitchRow({
-    required this.emoji,
+    required this.leading,
     required this.title,
     required this.subtitle,
     required this.value,
     required this.onChanged,
   });
 
-  final String emoji;
+  final Widget leading;
   final String title;
   final String subtitle;
   final bool value;
@@ -366,47 +396,11 @@ class _SwitchRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _RowShell(
-      emoji: emoji,
+      leading: leading,
       title: title,
       subtitle: subtitle,
       onTap: () => onChanged(!value),
       trailing: Switch(value: value, onChanged: onChanged),
-    );
-  }
-}
-
-/// Ô hiện giờ dạng viên thuốc, chạm để đổi giờ.
-class _TimePill extends StatelessWidget {
-  const _TimePill({required this.minutes, required this.onTap, this.enabled = true});
-
-  final int minutes;
-  final VoidCallback onTap;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final dark = theme.brightness == Brightness.dark;
-    return Material(
-      color: enabled
-          ? (dark ? const Color(0xFF173A4E) : const Color(0xFFE1F4FF))
-          : theme.colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Text(
-            formatHm(minutes),
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w800,
-              fontFeatures: const [FontFeature.tabularFigures()],
-              color: enabled ? (dark ? WaterColors.light : WaterColors.deep) : theme.colorScheme.outline,
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -438,14 +432,14 @@ class _TimedRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _RowShell(
-      emoji: emoji,
+      leading: Text(emoji, style: const TextStyle(fontSize: 24)),
       title: title,
       subtitle: subtitle,
       onTap: () => _pick(context),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _TimePill(minutes: minutes, enabled: value, onTap: () => _pick(context)),
+          TimePill(minutes: minutes, enabled: value, onTap: () => _pick(context)),
           Switch(value: value, onChanged: onChanged),
         ],
       ),
@@ -455,6 +449,7 @@ class _TimedRow extends StatelessWidget {
 
 class _HabitRow extends StatelessWidget {
   const _HabitRow({
+    required this.leading,
     required this.emoji,
     required this.name,
     required this.reminder,
@@ -463,6 +458,7 @@ class _HabitRow extends StatelessWidget {
     this.hint,
   });
 
+  final Widget leading;
   final String emoji;
   final String name;
   final HabitReminder? reminder;
@@ -487,215 +483,14 @@ class _HabitRow extends StatelessWidget {
     final r = reminder;
     final on = r?.enabled ?? false;
     return _RowShell(
-      emoji: emoji,
+      leading: leading,
       title: name,
       subtitle: r == null ? 'Chưa đặt giờ nhắc' : (on ? r.label : 'Đang tắt · ${r.label}'),
       onTap: () => _edit(context),
       trailing: Switch(
         value: on,
-        onChanged: (v) {
-          if (r == null) {
-            _edit(context);
-          } else {
-            onChanged(HabitReminder(minutes: r.minutes, weekdays: {...r.weekdays}, enabled: v));
-          }
-        },
+        onChanged: (v) => r == null ? _edit(context) : onChanged(r.copyWith(enabled: v)),
       ),
     );
   }
-}
-
-class _WaterCard extends StatelessWidget {
-  const _WaterCard({required this.state});
-  final AppState state;
-
-  static String _interval(int m) => switch (m) {
-    < 60 => '$m phút',
-    90 => '1,5 giờ',
-    _ => '${m ~/ 60} giờ',
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final r = state.reminders;
-    final slots = r.waterSlots;
-
-    Future<void> pick({required bool from}) async {
-      final m = await showTimeSheet(
-        context,
-        initial: from ? r.waterFrom : r.waterTo,
-        title: from ? 'Bắt đầu nhắc từ' : 'Nhắc đến',
-      );
-      if (m == null) return;
-      state.updateReminders((r) {
-        if (from) {
-          r.waterFrom = m;
-          r.waterTo = math.max(r.waterTo, m);
-        } else {
-          r.waterTo = m;
-          r.waterFrom = math.min(r.waterFrom, m);
-        }
-      });
-    }
-
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _SwitchRow(
-            emoji: '💧',
-            title: 'Nhắc uống nước',
-            subtitle: r.water
-                ? '${slots.length} lần mỗi ngày · ${_interval(r.waterEvery)} một lần'
-                : 'Đang tắt',
-            value: r.water,
-            onChanged: (v) => state.updateReminders((r) => r.water = v),
-          ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topCenter,
-            child: !r.water
-                ? const SizedBox(width: double.infinity)
-                : Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            for (final m in ReminderSettings.waterIntervals)
-                              ChoiceChip(
-                                label: Text(_interval(m)),
-                                selected: r.waterEvery == m,
-                                onSelected: (_) {
-                                  HapticFeedback.selectionClick();
-                                  state.updateReminders((r) => r.waterEvery = m);
-                                },
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        Row(
-                          children: [
-                            Text('Từ', style: theme.textTheme.bodyMedium),
-                            const SizedBox(width: 8),
-                            _TimePill(minutes: r.waterFrom, onTap: () => pick(from: true)),
-                            const SizedBox(width: 12),
-                            Text('đến', style: theme.textTheme.bodyMedium),
-                            const SizedBox(width: 8),
-                            _TimePill(minutes: r.waterTo, onTap: () => pick(from: false)),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        WaterTimeline(slots: slots, now: state.now),
-                      ],
-                    ),
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Dòng thời gian 5h–24h với các giọt nước đánh dấu giờ nhắc uống nước.
-class WaterTimeline extends StatelessWidget {
-  const WaterTimeline({super.key, required this.slots, required this.now});
-
-  final List<int> slots;
-  final DateTime now;
-
-  static const _start = 5 * 60;
-  static const _end = 24 * 60;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final nowMin = now.hour * 60 + now.minute;
-    final dark = theme.brightness == Brightness.dark;
-
-    return SizedBox(
-      height: 62,
-      child: LayoutBuilder(
-        builder: (context, c) {
-          double x(int m) => (m - _start) / (_end - _start) * c.maxWidth;
-          final progress = x(nowMin.clamp(_start, _end));
-          return Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned(
-                left: 0,
-                right: 0,
-                top: 30,
-                height: 6,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: dark ? WaterColors.glassDark : WaterColors.glass,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 0,
-                width: progress,
-                top: 30,
-                height: 6,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [WaterColors.light, WaterColors.mid]),
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                ),
-              ),
-              for (final (i, m) in slots.indexed)
-                Positioned(
-                  key: ValueKey(m),
-                  left: x(m) - 7,
-                  top: 6,
-                  child: TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0, end: 1),
-                    duration: Duration(milliseconds: 350 + i * 45),
-                    curve: Interval(i * 45 / (350 + i * 45), 1, curve: Curves.easeOutBack),
-                    builder: (context, v, child) => Transform.scale(
-                      scale: v,
-                      alignment: Alignment.bottomCenter,
-                      child: Opacity(opacity: m <= nowMin ? 0.45 : 1, child: child),
-                    ),
-                    child: const CustomPaint(size: Size(14, 18), painter: _MiniDropPainter()),
-                  ),
-                ),
-              for (final h in [6, 12, 18, 24])
-                Positioned(
-                  left: x(h * 60) - 14,
-                  width: 28,
-                  top: 42,
-                  child: Text(
-                    '${h}h',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _MiniDropPainter extends CustomPainter {
-  const _MiniDropPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    paintDroplet(canvas, Offset(size.width / 2, size.height - size.width / 2), size.width);
-  }
-
-  @override
-  bool shouldRepaint(_MiniDropPainter old) => false;
 }

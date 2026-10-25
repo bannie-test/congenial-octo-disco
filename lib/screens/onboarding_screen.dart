@@ -17,7 +17,8 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _pages = PageController();
   int _page = 0;
-  final _good = <HabitTemplate>{};
+  // Uống nước là thói quen mặc định, luôn được chọn.
+  final _good = <HabitTemplate>{waterTemplate};
   final _bad = <HabitTemplate>{};
   bool _morning = true;
   bool _evening = true;
@@ -27,7 +28,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   static const _pageCount = 4;
 
   /// Mặc định bật nhắc uống nước nếu người dùng chọn thói quen uống nước.
-  bool get _waterOn => _water ?? _good.any((t) => t.emoji == '💧');
+  bool get _waterOn => _water ?? true;
 
   @override
   void dispose() {
@@ -44,8 +45,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final state = AppScope.of(context);
     state.reminders
       ..morning = _morning
-      ..evening = _evening
-      ..water = _waterOn;
+      ..evening = _evening;
     if (enable) {
       setState(() => _busy = true);
       // Chỉ xin quyền khi người dùng chủ động bấm, sau khi đã hiểu lợi ích.
@@ -53,7 +53,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       if (!mounted) return;
     }
     HapticFeedback.mediumImpact();
-    state.completeOnboarding(good: _good.toList(), bad: _bad.toList(), enableReminders: enable);
+    state.completeOnboarding(
+      good: _good.toList(),
+      bad: _bad.toList(),
+      enableReminders: enable,
+      waterReminder: _waterOn,
+    );
   }
 
   @override
@@ -88,7 +93,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     subtitle: 'Mỗi lần hoàn thành, mầm của bạn sẽ lớn thêm một chút.',
                     templates: goodHabitTemplates,
                     selected: _good,
-                    onToggle: (t) => setState(() => _good.contains(t) ? _good.remove(t) : _good.add(t)),
+                    onToggle: (t) {
+                      if (t == waterTemplate) return;
+                      setState(() => _good.contains(t) ? _good.remove(t) : _good.add(t));
+                    },
                   ),
                   _PickPage(
                     title: 'Và muốn bỏ điều gì?',
@@ -251,7 +259,7 @@ class _PickPage extends StatelessWidget {
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOutBack,
                 child: FilterChip(
-                  label: Text('${t.emoji}  ${t.name}'),
+                  label: Text('${t.emoji}  ${t.name}${t == waterTemplate ? ' · mặc định' : ''}'),
                   labelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                   selected: selected.contains(t),

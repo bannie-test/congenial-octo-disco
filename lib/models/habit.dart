@@ -6,6 +6,11 @@ String dayKey(DateTime d) =>
     '${d.month.toString().padLeft(2, '0')}-'
     '${d.day.toString().padLeft(2, '0')}';
 
+/// Ngày (0 giờ) cách [d] một số ngày.
+DateTime dayOffset(DateTime d, int days) => DateTime(d.year, d.month, d.day + days);
+
+const waterEmoji = '💧';
+
 /// Thói quen tốt: mỗi ngày chạm một lần để đánh dấu hoàn thành.
 class GoodHabit {
   GoodHabit({required this.id, required this.name, required this.emoji, Set<String>? doneDays, this.reminder})
@@ -20,6 +25,8 @@ class GoodHabit {
 
   HabitReminder? reminder;
 
+  bool get isWater => emoji == waterEmoji;
+
   bool isDoneOn(DateTime day) => doneDays.contains(dayKey(day));
 
   /// Số ngày liên tiếp đã hoàn thành. Nếu hôm nay chưa làm thì đếm
@@ -32,15 +39,29 @@ class GoodHabit {
 
   (int, DateTime) _streakRun(DateTime now) {
     var day = DateTime(now.year, now.month, now.day);
-    if (!isDoneOn(day)) day = DateTime(day.year, day.month, day.day - 1);
+    if (!isDoneOn(day)) day = dayOffset(day, -1);
     var count = 0;
     var start = day;
     while (isDoneOn(day)) {
       count++;
       start = day;
-      day = DateTime(day.year, day.month, day.day - 1);
+      day = dayOffset(day, -1);
     }
     return (count, start);
+  }
+
+  /// Chuỗi dài nhất từng đạt.
+  int get bestStreak {
+    final days = doneDays.map(DateTime.parse).toList()..sort();
+    var best = 0;
+    var run = 0;
+    DateTime? prev;
+    for (final d in days) {
+      run = prev != null && dayOffset(prev, 1) == d ? run + 1 : 1;
+      if (run > best) best = run;
+      prev = d;
+    }
+    return best;
   }
 
   Map<String, dynamic> toJson() => {
@@ -69,7 +90,6 @@ class BadHabit {
     required this.name,
     required this.emoji,
     required this.cleanSince,
-    this.costPerDay = 0,
     List<DateTime>? relapses,
     this.reminder,
   }) : relapses = relapses ?? <DateTime>[];
@@ -80,9 +100,6 @@ class BadHabit {
 
   /// Bắt đầu chuỗi "sạch" hiện tại.
   DateTime cleanSince;
-
-  /// Số tiền (VNĐ) trung bình tiêu cho thói quen này mỗi ngày.
-  final int costPerDay;
 
   final List<DateTime> relapses;
 
@@ -96,8 +113,16 @@ class BadHabit {
 
   int cleanDays(DateTime now) => cleanFor(now).inDays;
 
-  /// Tiền tiết kiệm được trong chuỗi hiện tại, tính theo từng giờ.
-  int moneySaved(DateTime now) => (costPerDay * cleanFor(now).inMinutes / Duration.minutesPerDay).floor();
+  /// Chuỗi "sạch" dài nhất (ngày), tính cả chuỗi hiện tại.
+  int bestCleanDays(DateTime now) {
+    final sorted = [...relapses]..sort();
+    var best = cleanDays(now);
+    for (var i = 1; i < sorted.length; i++) {
+      final d = sorted[i].difference(sorted[i - 1]).inDays;
+      if (d > best) best = d;
+    }
+    return best;
+  }
 
   bool relapsedWithin(DateTime now, Duration window) => relapses.any((r) => now.difference(r) < window);
 
@@ -111,7 +136,6 @@ class BadHabit {
     'name': name,
     'emoji': emoji,
     'cleanSince': cleanSince.toIso8601String(),
-    'costPerDay': costPerDay,
     'relapses': relapses.map((r) => r.toIso8601String()).toList(),
     if (reminder != null) 'reminder': reminder!.toJson(),
   };
@@ -121,7 +145,6 @@ class BadHabit {
     name: json['name'] as String,
     emoji: json['emoji'] as String,
     cleanSince: DateTime.parse(json['cleanSince'] as String),
-    costPerDay: (json['costPerDay'] as num?)?.toInt() ?? 0,
     relapses: (json['relapses'] as List).cast<String>().map(DateTime.parse).toList(),
     reminder: json['reminder'] == null
         ? null
@@ -131,18 +154,31 @@ class BadHabit {
 
 /// Gợi ý sẵn cho onboarding, gần gũi với người Việt.
 class HabitTemplate {
-  const HabitTemplate(this.emoji, this.name, {this.costPerDay = 0, this.remindAt});
+  const HabitTemplate(this.emoji, this.name, {this.remindAt, this.every});
   final String emoji;
   final String name;
-  final int costPerDay;
 
   /// Giờ nhắc gợi ý (phút tính từ 0 giờ). Với thói quen xấu là "giờ hay thèm".
   final int? remindAt;
+
+  /// Nhắc lặp lại theo chu kỳ (phút), ví dụ uống nước.
+  final int? every;
+
+  HabitReminder? get reminder => every != null
+      ? HabitReminder.interval(every: every!)
+      : remindAt == null
+      ? null
+      : HabitReminder(minutes: remindAt!);
 }
 
+/// Uống nước là thói quen tốt mặc định, luôn có trong danh sách.
+const waterTemplate = HabitTemplate(waterEmoji, 'Uống đủ 2 lít nước', every: 120);
+
 const goodHabitTemplates = <HabitTemplate>[
-  HabitTemplate('💧', 'Uống đủ 2 lít nước'),
-  HabitTemplate('🏃', 'Vận động 20 phút', remindAt: 17 * 60 + 30),
+  waterTemplate,
+  HabitTemplate('🏃', 'Chạy bộ 20 phút', remindAt: 17 * 60 + 30),
+  HabitTemplate('🚶', 'Đi bộ 30 phút', remindAt: 18 * 60),
+  HabitTemplate('🏋️', 'Tập thể dục', remindAt: 6 * 60 + 30),
   HabitTemplate('📖', 'Đọc sách 10 trang', remindAt: 21 * 60 + 30),
   HabitTemplate('😴', 'Ngủ trước 12 giờ', remindAt: 23 * 60),
   HabitTemplate('🧘', 'Thiền 5 phút', remindAt: 7 * 60),
@@ -152,12 +188,12 @@ const goodHabitTemplates = <HabitTemplate>[
 ];
 
 const badHabitTemplates = <HabitTemplate>[
-  HabitTemplate('🧋', 'Trà sữa', costPerDay: 40000, remindAt: 14 * 60 + 30),
+  HabitTemplate('🧋', 'Trà sữa', remindAt: 14 * 60 + 30),
   HabitTemplate('📱', 'Lướt TikTok quá đà', remindAt: 22 * 60 + 30),
-  HabitTemplate('🚬', 'Hút thuốc', costPerDay: 30000, remindAt: 9 * 60 + 30),
-  HabitTemplate('🍺', 'Rượu bia', costPerDay: 80000, remindAt: 18 * 60),
-  HabitTemplate('🍟', 'Đồ ăn vặt', costPerDay: 25000, remindAt: 15 * 60 + 30),
-  HabitTemplate('🛍️', 'Mua sắm bốc đồng', costPerDay: 100000, remindAt: 21 * 60),
+  HabitTemplate('🚬', 'Hút thuốc', remindAt: 9 * 60 + 30),
+  HabitTemplate('🍺', 'Rượu bia', remindAt: 18 * 60),
+  HabitTemplate('🍟', 'Đồ ăn vặt', remindAt: 15 * 60 + 30),
+  HabitTemplate('🛍️', 'Mua sắm bốc đồng', remindAt: 21 * 60),
   HabitTemplate('🎮', 'Chơi game thâu đêm', remindAt: 22 * 60),
   HabitTemplate('🤬', 'Nói tục'),
 ];

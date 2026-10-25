@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Đặt lại lịch nhắc sau khi khởi động lại máy. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Lấy dự báo thời tiết cho lời chào buổi sáng. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="Mầm"
         android:name="${applicationName}"

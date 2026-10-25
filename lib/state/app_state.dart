@@ -7,19 +7,29 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/habit.dart';
 import '../models/inbox_item.dart';
+import '../models/journal.dart';
 import '../models/reminder.dart';
 import '../services/notification_service.dart';
 import '../services/reminder_planner.dart';
+import '../services/sound_service.dart';
+import '../services/weather.dart';
 import '../utils/format.dart';
 
 typedef Clock = DateTime Function();
 
-/// Trạng thái toàn app: danh sách thói quen, nhắc nhở, hộp thông báo,
-/// lưu xuống máy, và tính toán độ lớn / sức sống của mầm cây.
+/// Trạng thái toàn app: thói quen, mục tiêu, lịch, cảm xúc, nhắc nhở,
+/// hộp thông báo, thời tiết; lưu xuống máy và tính độ lớn / sức sống của Mầm.
 class AppState extends ChangeNotifier {
-  AppState({this._prefs, Clock? clock, NotificationService? notifications})
-    : _clock = clock ?? DateTime.now,
-      notifications = notifications ?? PreviewNotificationService();
+  AppState({
+    this._prefs,
+    Clock? clock,
+    NotificationService? notifications,
+    WeatherService? weatherService,
+    SoundService? sounds,
+  }) : _clock = clock ?? DateTime.now,
+       notifications = notifications ?? PreviewNotificationService(),
+       _weatherService = weatherService ?? NoWeatherService(),
+       sounds = sounds ?? SilentSoundService();
 
   static const _storageKey = 'mam_state_v1';
   static const _inboxLimit = 60;
@@ -31,10 +41,14 @@ class AppState extends ChangeNotifier {
   final SharedPreferences? _prefs;
   final Clock _clock;
   final NotificationService notifications;
+  final WeatherService _weatherService;
+  final SoundService sounds;
 
   final List<GoodHabit> goodHabits = [];
   final List<BadHabit> badHabits = [];
   final ReminderSettings reminders = ReminderSettings();
+  final List<PlanEvent> events = [];
+  final Map<String, MoodEntry> moods = {};
 
   /// Thông báo trong app, mới nhất ở đầu.
   final List<InboxItem> inbox = [];
@@ -45,6 +59,15 @@ class AppState extends ChangeNotifier {
   bool onboarded = false;
   bool reminderPromptDismissed = false;
 
+  /// Ngày bắt đầu dùng app, để không tính "lỡ mục tiêu" cho những ngày trước đó.
+  DateTime? startedAt;
+
+  /// Số thói quen tốt cần hoàn thành mỗi ngày.
+  int dailyGoal = 3;
+
+  int cityIndex = 0;
+  Weather? weather;
+
   /// Quyền thông báo của hệ điều hành (null = chưa kiểm tra).
   bool? notificationsAllowed;
 
@@ -53,8 +76,10 @@ class AppState extends ChangeNotifier {
 
   DateTime get now => _clock();
 
+  City get city => cities[cityIndex.clamp(0, cities.length - 1)];
+
   /// Các thông báo mới cần hiện banner trong app.
-  Stream<InboxItem> get events => _events.stream;
+  Stream<InboxItem> get inboxEvents => _events.stream;
 
   /// Lấy các sự kiện phát sinh khi chưa có ai lắng nghe (ví dụ lúc mở app).
   List<InboxItem> takeUndelivered() {
@@ -67,28 +92,60 @@ class AppState extends ChangeNotifier {
     final raw = _prefs?.getString(_storageKey);
     if (raw == null) return;
     final json = jsonDecode(raw) as Map<String, dynamic>;
+    List<Map<String, dynamic>> list(String key) =>
+        ((json[key] as List?) ?? const []).cast<Map<String, dynamic>>();
+
     onboarded = json['onboarded'] as bool? ?? false;
     goodHabits
       ..clear()
-      ..addAll((json['good'] as List).map((e) => GoodHabit.fromJson(e as Map<String, dynamic>)));
+      ..addAll(list('good').map(GoodHabit.fromJson));
     badHabits
       ..clear()
-      ..addAll((json['bad'] as List).map((e) => BadHabit.fromJson(e as Map<String, dynamic>)));
+      ..addAll(list('bad').map(BadHabit.fromJson));
     if (json['reminders'] case final Map<String, dynamic> r) reminders.readJson(r);
     reminderPromptDismissed = json['reminderPromptDismissed'] as bool? ?? false;
     inbox
       ..clear()
-      ..addAll(
-        ((json['inbox'] as List?) ?? const []).map((e) => InboxItem.fromJson(e as Map<String, dynamic>)),
-      );
+      ..addAll(list('inbox').map(InboxItem.fromJson));
+    events
+      ..clear()
+      ..addAll(list('events').map(PlanEvent.fromJson));
+    moods
+      ..clear()
+      ..addEntries(list('moods').map(MoodEntry.fromJson).map((m) => MapEntry(m.day, m)));
     _celebrated
       ..clear()
       ..addAll(((json['celebrated'] as List?) ?? const []).cast<String>());
-    // Dữ liệu từ bản cũ chưa có lịch sử chúc mừng: ghi nhận im lặng những gì
-    // đã đạt, tránh dội một loạt thông báo ngay lần mở đầu tiên.
-    final migrated = json['celebrated'] == null;
+    dailyGoal = (json['dailyGoal'] as num?)?.toInt() ?? math.min(3, math.max(1, goodHabits.length));
+    startedAt = json['startedAt'] == null ? null : DateTime.parse(json['startedAt'] as String);
+    cityIndex = (json['city'] as num?)?.toInt() ?? 0;
+    if (json['weather'] case final Map<String, dynamic> w) weather = Weather.fromJson(w);
+
+    final migrated = _migrate(json);
     if (migrated) _collectEvents(silent: true);
     if (_collectEvents().isNotEmpty || migrated) _save();
+  }
+
+  /// Chuyển dữ liệu của bản cũ sang cấu trúc mới. Trả về true nếu có thay đổi.
+  bool _migrate(Map<String, dynamic> json) {
+    var changed = json['celebrated'] == null || json['startedAt'] == null;
+    startedAt ??= now;
+    // Nhắc uống nước trước đây là mục riêng, nay gộp vào thói quen uống nước.
+    final legacy = reminders.legacyWater;
+    if (legacy != null) {
+      final water = goodHabits.where((h) => h.isWater).firstOrNull;
+      if (water == null) {
+        goodHabits.insert(
+          0,
+          GoodHabit(id: _newId(), name: waterTemplate.name, emoji: waterEmoji, reminder: legacy),
+        );
+      } else {
+        water.reminder ??= legacy;
+      }
+      reminders.legacyWater = null;
+      changed = true;
+    }
+    return changed;
   }
 
   void _save() {
@@ -101,7 +158,13 @@ class AppState extends ChangeNotifier {
         'reminders': reminders.toJson(),
         'reminderPromptDismissed': reminderPromptDismissed,
         'inbox': inbox.map((i) => i.toJson()).toList(),
+        'events': events.map((e) => e.toJson()).toList(),
+        'moods': moods.values.map((m) => m.toJson()).toList(),
         'celebrated': _celebrated.toList(),
+        'dailyGoal': dailyGoal,
+        'startedAt': startedAt?.toIso8601String(),
+        'city': cityIndex,
+        'weather': ?weather?.toJson(),
       }),
     );
   }
@@ -119,24 +182,22 @@ class AppState extends ChangeNotifier {
     required List<HabitTemplate> good,
     required List<HabitTemplate> bad,
     bool enableReminders = false,
+    bool waterReminder = true,
   }) {
-    HabitReminder? reminderFor(HabitTemplate t) =>
-        t.remindAt == null ? null : HabitReminder(minutes: t.remindAt!);
-    for (final t in good) {
-      goodHabits.add(GoodHabit(id: _newId(), name: t.name, emoji: t.emoji, reminder: reminderFor(t)));
+    // Uống nước là thói quen tốt mặc định.
+    final templates = [if (!good.any((t) => t.emoji == waterEmoji)) waterTemplate, ...good];
+    for (final t in templates) {
+      final reminder = t.reminder;
+      if (t.emoji == waterEmoji && !waterReminder) reminder?.enabled = false;
+      goodHabits.add(GoodHabit(id: _newId(), name: t.name, emoji: t.emoji, reminder: reminder));
     }
     for (final t in bad) {
       badHabits.add(
-        BadHabit(
-          id: _newId(),
-          name: t.name,
-          emoji: t.emoji,
-          cleanSince: now,
-          costPerDay: t.costPerDay,
-          reminder: reminderFor(t),
-        ),
+        BadHabit(id: _newId(), name: t.name, emoji: t.emoji, cleanSince: now, reminder: t.reminder),
       );
     }
+    dailyGoal = math.min(3, goodHabits.length);
+    startedAt = now;
     reminders.enabled = enableReminders;
     onboarded = true;
     _addInbox(
@@ -147,7 +208,7 @@ class AppState extends ChangeNotifier {
         title: 'Chào mừng bạn đến với Mầm!',
         body:
             'Chạm vào một thói quen để tưới nước cho Mầm. '
-            'Mỗi ngày không tái phạm, Mầm sẽ khỏe thêm một chút.',
+            'Mỗi ngày đạt mục tiêu, Mầm sẽ tươi tốt thêm một chút.',
         at: now,
       ),
     );
@@ -159,22 +220,14 @@ class AppState extends ChangeNotifier {
     _changed(reschedule: true);
   }
 
-  void addBadHabit(String name, String emoji, {int costPerDay = 0, HabitReminder? reminder}) {
-    badHabits.add(
-      BadHabit(
-        id: _newId(),
-        name: name,
-        emoji: emoji,
-        cleanSince: now,
-        costPerDay: costPerDay,
-        reminder: reminder,
-      ),
-    );
+  void addBadHabit(String name, String emoji, {HabitReminder? reminder}) {
+    badHabits.add(BadHabit(id: _newId(), name: name, emoji: emoji, cleanSince: now, reminder: reminder));
     _changed(reschedule: true);
   }
 
   void removeGoodHabit(String id) {
     goodHabits.removeWhere((h) => h.id == id);
+    events.removeWhere((e) => e.habitId == id);
     _changed(reschedule: true);
   }
 
@@ -207,6 +260,109 @@ class AppState extends ChangeNotifier {
       ),
     );
     _changed(reschedule: true);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mục tiêu
+
+  /// Mục tiêu thực tế, không vượt quá số thói quen hiện có.
+  int get goal => goodHabits.isEmpty ? 0 : dailyGoal.clamp(1, goodHabits.length);
+
+  void setDailyGoal(int value) {
+    dailyGoal = value.clamp(1, math.max(1, goodHabits.length));
+    _changed();
+  }
+
+  int doneOn(DateTime day) => goodHabits.where((h) => h.isDoneOn(day)).length;
+
+  bool goalMetOn(DateTime day) => goal > 0 && doneOn(day) >= goal;
+
+  int get doneTodayCount => doneOn(now);
+
+  /// Tiến độ mục tiêu hôm nay (0..1), dùng cho giọt nước trên màn hình chính.
+  double get todayProgress => goal == 0 ? 0 : math.min(1, doneTodayCount / goal);
+
+  // ---------------------------------------------------------------------------
+  // Lịch và cảm xúc
+
+  void addEvent(PlanEvent e) {
+    events.add(e);
+    _changed(reschedule: true);
+  }
+
+  PlanEvent newEvent({
+    required String title,
+    required String emoji,
+    required int minutes,
+    String? habitId,
+    DateTime? date,
+    int? weekday,
+    bool remind = true,
+  }) => PlanEvent(
+    id: _newId(),
+    title: title,
+    emoji: emoji,
+    minutes: minutes,
+    habitId: habitId,
+    date: date,
+    weekday: weekday,
+    remind: remind,
+  );
+
+  void removeEvent(String id) {
+    events.removeWhere((e) => e.id == id);
+    _changed(reschedule: true);
+  }
+
+  List<PlanEvent> eventsOn(DateTime day) =>
+      events.where((e) => e.occursOn(day)).toList()..sort((a, b) => a.minutes.compareTo(b.minutes));
+
+  MoodEntry? moodOn(DateTime day) => moods[dayKey(day)];
+
+  void setMood(DateTime day, String moodId, String note) {
+    final key = dayKey(day);
+    moods[key] = MoodEntry(day: key, moodId: moodId, note: note.trim(), at: now);
+    _changed();
+  }
+
+  void removeMood(String day) {
+    moods.remove(day);
+    _changed();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Thời tiết và âm thanh
+
+  void setCity(int index) {
+    cityIndex = index;
+    weather = null;
+    _changed();
+    unawaited(refreshWeather(force: true));
+  }
+
+  /// Cập nhật thời tiết nếu dữ liệu đã cũ hơn 30 phút.
+  Future<void> refreshWeather({bool force = false}) async {
+    final w = weather;
+    if (!force && w != null && now.difference(w.fetchedAt) < const Duration(minutes: 30)) return;
+    try {
+      final fresh = await _weatherService.fetch(city);
+      if (fresh == null) return;
+      weather = fresh;
+      _changed(reschedule: true);
+    } catch (e) {
+      debugPrint('Không lấy được thời tiết: $e');
+    }
+  }
+
+  /// Dự báo cho buổi sáng kế tiếp, gắn vào thông báo chào buổi sáng.
+  String? get morningForecast {
+    final t = now;
+    final passed = t.hour * 60 + t.minute >= reminders.morningAt;
+    return weather?.forecastFor(dayKey(passed ? dayOffset(t, 1) : t))?.summary.toLowerCase();
+  }
+
+  void playSound(Sfx sfx) {
+    if (reminders.sound) unawaited(sounds.play(sfx));
   }
 
   // ---------------------------------------------------------------------------
@@ -248,8 +404,14 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  List<PlannedNotification> get plannedNotifications =>
-      planNotifications(settings: reminders, good: goodHabits, bad: badHabits, now: now);
+  List<PlannedNotification> get plannedNotifications => planNotifications(
+    settings: reminders,
+    good: goodHabits,
+    bad: badHabits,
+    events: events,
+    morningForecast: morningForecast,
+    now: now,
+  );
 
   bool _rescheduling = false;
   bool _rescheduleAgain = false;
@@ -311,8 +473,8 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Tìm các thành tích mới: lên cấp, chuỗi ngày, cột mốc không tái phạm,
-  /// hoàn thành đủ thói quen trong ngày. Mỗi sự kiện chỉ báo một lần.
+  /// Tìm các sự kiện mới: lên cấp, chuỗi ngày, cột mốc không tái phạm, đạt
+  /// hoặc lỡ mục tiêu ngày. Mỗi sự kiện chỉ báo một lần.
   List<InboxItem> _collectEvents({bool silent = false}) {
     if (!onboarded) return const [];
     final fresh = <InboxItem>[];
@@ -365,32 +527,52 @@ class AppState extends ChangeNotifier {
       final since = h.cleanSince.toIso8601String();
       reach([for (final m in reached) 'clean:${h.id}:$since:$m'], () {
         final m = reached.last;
-        final saved = h.moneySaved(t);
         return InboxItem(
           id: 'clean:${h.id}:$since:$m',
           kind: InboxKind.clean,
           emoji: '🏆',
           title: 'Cột mốc $m ngày!',
-          body:
-              '"${h.name}": $m ngày không tái phạm'
-              '${saved > 0 ? ', tiết kiệm được ${formatVnd(saved)}' : ''}. Mầm tự hào về bạn!',
+          body: '"${h.name}": $m ngày không tái phạm. Mầm tự hào về bạn!',
           at: t,
         );
       });
     }
 
     final today = dayKey(t);
-    if (goodHabits.isNotEmpty && doneTodayCount == goodHabits.length) {
-      // Khóa theo ngày chỉ cần giữ của hôm nay.
-      _celebrated.removeWhere((k) => k.startsWith('full:') && k != 'full:$today');
+    // Khóa theo ngày chỉ cần giữ vài ngày gần nhất.
+    final yesterday = dayKey(dayOffset(t, -1));
+    _celebrated.removeWhere(
+      (k) =>
+          (k.startsWith('full:') || k.startsWith('missed:')) && !k.endsWith(today) && !k.endsWith(yesterday),
+    );
+    if (goalMetOn(t)) {
       reach(['full:$today'], () {
-        final n = goodHabits.length;
+        final done = doneTodayCount;
         return InboxItem(
           id: 'full:$today',
           kind: InboxKind.daily,
           emoji: '💧',
-          title: 'Đã tưới đủ cho Mầm hôm nay!',
-          body: 'Bạn hoàn thành $n/$n thói quen. Mầm đang uống nước no nê 😋',
+          title: 'Đạt mục tiêu hôm nay!',
+          body: 'Bạn hoàn thành $done/$goal thói quen. Mầm đang uống nước no nê 😋',
+          at: t,
+        );
+      });
+    }
+
+    // Hôm qua lỡ mục tiêu (chỉ tính từ ngày bắt đầu dùng app).
+    final y = dayOffset(t, -1);
+    final start = startedAt;
+    if (goal > 0 &&
+        start != null &&
+        !y.isBefore(DateTime(start.year, start.month, start.day)) &&
+        !goalMetOn(y)) {
+      reach(['missed:$yesterday'], () {
+        return InboxItem(
+          id: 'missed:$yesterday',
+          kind: InboxKind.missed,
+          emoji: '🥀',
+          title: 'Hôm qua Mầm hơi khát',
+          body: 'Bạn hoàn thành ${doneOn(y)}/$goal thói quen. Hôm nay mình cùng bù lại nhé!',
           at: t,
         );
       });
@@ -416,13 +598,6 @@ class AppState extends ChangeNotifier {
   // ---------------------------------------------------------------------------
   // Mầm
 
-  int get doneTodayCount => goodHabits.where((h) => h.isDoneOn(now)).length;
-
-  /// Tỉ lệ hoàn thành hôm nay (0..1), dùng cho giọt nước trên màn hình chính.
-  double get todayProgress => goodHabits.isEmpty ? 0 : doneTodayCount / goodHabits.length;
-
-  int get totalMoneySaved => badHabits.fold(0, (sum, h) => sum + h.moneySaved(now));
-
   /// Điểm tăng trưởng: mỗi lần hoàn thành thói quen tốt +1,
   /// mỗi ngày "sạch" của thói quen xấu +1.
   int get growthPoints =>
@@ -447,19 +622,17 @@ class AppState extends ChangeNotifier {
     return (growthPoints - lo) / (hi - lo);
   }
 
-  /// Sức sống của mầm (0.2..1): dựa vào tỉ lệ hoàn thành 3 ngày gần nhất
-  /// và bị trừ nếu vừa tái phạm trong 24 giờ qua.
+  /// Sức sống của mầm (0.2..1): mức đạt mục tiêu ngày trong 3 ngày gần nhất,
+  /// bị trừ nếu vừa tái phạm trong 24 giờ qua.
   double get vitality {
     var score = 1.0;
-    if (goodHabits.isNotEmpty) {
-      var done = 0;
+    if (goal > 0) {
+      var total = 0.0;
       for (var i = 0; i < 3; i++) {
-        final day = now.subtract(Duration(days: i));
-        done += goodHabits.where((h) => h.isDoneOn(day)).length;
+        total += math.min(1, doneOn(dayOffset(now, -i)) / goal);
       }
-      // Hôm nay chưa kết thúc nên chỉ tính 2 ngày trước làm mẫu số tối thiểu.
-      final expected = goodHabits.length * 2;
-      score = 0.4 + 0.6 * math.min(1, done / expected);
+      // Hôm nay chưa kết thúc nên chỉ cần 2 ngày đạt mục tiêu là đầy sức sống.
+      score = 0.4 + 0.6 * math.min(1, total / 2);
     }
     final relapsed = badHabits.where((h) => h.relapsedWithin(now, const Duration(hours: 24)));
     score -= 0.25 * relapsed.length;

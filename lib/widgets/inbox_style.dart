@@ -10,6 +10,7 @@ List<Color> inboxColors(InboxKind kind) => switch (kind) {
   InboxKind.clean => const [Color(0xFFFFDE7A), Color(0xFFF2A516)],
   InboxKind.daily => const [Color(0xFF7FD8FF), Color(0xFF1E8FE0)],
   InboxKind.relapse => const [Color(0xFFC3CCFF), Color(0xFF7C8CF0)],
+  InboxKind.missed => const [Color(0xFFE6D3B8), Color(0xFFB8956A)],
 };
 
 /// Biểu tượng tròn chứa emoji của thông báo.

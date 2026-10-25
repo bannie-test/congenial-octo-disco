@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 
 import '../models/habit.dart';
 import '../state/app_state.dart';
-import '../utils/format.dart';
 import '../widgets/liquid.dart';
 
 /// Bài thở 60 giây giúp vượt qua cơn thèm: hít 4s, giữ 4s, thở ra 6s.
@@ -114,7 +113,6 @@ class _CravingScreenState extends State<CravingScreen> with TickerProviderStateM
     final theme = Theme.of(context);
     final now = widget.state.now;
     final days = widget.habit.cleanDays(now);
-    final saved = widget.habit.moneySaved(now);
 
     return Scaffold(
       body: Container(
@@ -196,8 +194,8 @@ class _CravingScreenState extends State<CravingScreen> with TickerProviderStateM
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      days > 0 || saved > 0
-                          ? 'Bạn đã giữ được $days ngày${saved > 0 ? ' và tiết kiệm ${formatVnd(saved)}' : ''}. Đừng để mất nó!'
+                      days > 0
+                          ? 'Bạn đã giữ được $days ngày. Đừng để mất nó!'
                           : 'Mỗi lần vượt qua cơn thèm, bạn mạnh mẽ hơn một chút.',
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white70),
